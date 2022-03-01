@@ -15,5 +15,7 @@ model:
         descriptor_loss: True
 
 wandb:
-    dry_run: True
-    project: ""
+    dry_run: False
+    project: kp2d
+    entity: yuang
+    name: no_ionet

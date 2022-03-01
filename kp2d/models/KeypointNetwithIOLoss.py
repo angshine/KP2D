@@ -21,11 +21,11 @@ def build_descriptor_loss(source_des, target_des, source_points, tar_points, tar
     source_des: torch.Tensor (B,256,H/8,W/8)
         Source image descriptors.
     target_des: torch.Tensor (B,256,H/8,W/8)
-        Target image descriptors.
+        Target image descriptors (normalized & detached)
     source_points: torch.Tensor (B,H/8,W/8,2)
-        Source image keypoints
+        Source image keypoints (normalized & detached)
     tar_points: torch.Tensor (B,H/8,W/8,2)
-        Target image keypoints
+        Source image keypoints warped to the target frame
     tar_points_un: torch.Tensor (B,2,H/8,W/8)
         Target image keypoints unnormalized
     eval_only: bool
@@ -62,8 +62,8 @@ def build_descriptor_loss(source_des, target_des, source_points, tar_points, tar
         # Compute dense descriptor distance matrix and find nearest neighbor
         ref_desc = ref_desc.div(torch.norm(ref_desc, p=2, dim=0))
         tar_desc = tar_desc.div(torch.norm(tar_desc, p=2, dim=0))
-        dmat = torch.mm(ref_desc.t(), tar_desc)
-        dmat = torch.sqrt(2 - 2 * torch.clamp(dmat, min=-1, max=1))
+        dmat = torch.mm(ref_desc.t(), tar_desc)  # cosine sim
+        dmat = torch.sqrt(2 - 2 * torch.clamp(dmat, min=-1, max=1))  # distance
 
         # Sort distance matrix
         dmat_sorted, idx = torch.sort(dmat, dim=1)
@@ -129,6 +129,16 @@ def warp_homography_batch(sources, homographies):
         warped_sources.append(source)
     return torch.stack(warped_sources, dim=0)
 
+
+def compute_topk_mean_score(score, valid_mask, topk=[100, 300, 500]):
+    mean_topks = [[] for _ in range(len(topk))]
+    for s, m in zip(score, valid_mask):
+        vs, vn = s[m[None]], m.sum()
+        vs = torch.sort(vs, descending=True)[0]
+        for i in range(len(topk)):
+            mean_topks[i].append(float(vs[:topk[i]].mean()))
+    mean_topks = [float(np.mean(m)) for m in mean_topks]
+    return mean_topks
 
 class KeypointNetwithIOLoss(torch.nn.Module):
     """
@@ -225,6 +235,7 @@ class KeypointNetwithIOLoss(torch.nn.Module):
         """
 
         loss_2d = 0
+        loss_stats = dict()
 
         if self.training:
 
@@ -292,29 +303,56 @@ class KeypointNetwithIOLoss(torch.nn.Module):
 
             # Keypoint loss
             loc_loss = d_uv_l2_min[dist_norm_valid_mask].mean()
+            loss_stats['loc_loss'] = loc_loss
             loss_2d += self.keypoint_loss_weight * loc_loss.mean()
 
             #Desc Head Loss, per-pixel level triplet loss from https://arxiv.org/pdf/1902.11046.pdf.
             if self.descriptor_loss:
                 metric_loss, recall_2d = build_descriptor_loss(source_feat, target_feat, source_uv_norm.detach(), source_uv_warped_norm.detach(), source_uv_warped, keypoint_mask=border_mask, relax_field=self.relax_field)
+                loss_stats['metric_loss'] = metric_loss
                 loss_2d += self.descriptor_loss_weight * metric_loss * 2
             else:
                 _, recall_2d = build_descriptor_loss(source_feat, target_feat, source_uv_norm, source_uv_warped_norm, source_uv_warped, keypoint_mask=border_mask, relax_field=self.relax_field, eval_only=True)
 
             #Score Head Loss
+            # target_score (0.1, 0.3, 0.5, 0.7, 0.9) percentile: [0.4201, 0.4748, 0.5172, 0.5697, 0.6562]
             target_score_associated = target_score.view(B,Hc*Wc).gather(1, d_uv_l2_min_index).view(B,Hc,Wc).unsqueeze(1)
+            # __import__('ipdb').set_trace()  # TODO: Check initial score stats
             dist_norm_valid_mask = dist_norm_valid_mask.view(B,Hc,Wc).unsqueeze(1) & border_mask.unsqueeze(1)
             d_uv_l2_min = d_uv_l2_min.view(B,Hc,Wc).unsqueeze(1)
-            loc_err = d_uv_l2_min[dist_norm_valid_mask]
+            loc_err = d_uv_l2_min[dist_norm_valid_mask]  # (n, )
 
+            # NOTE: loc_err.mean() ignore batch dim
             usp_loss = (target_score_associated[dist_norm_valid_mask] + source_score[dist_norm_valid_mask]) * (loc_err - loc_err.mean())
+            loss_stats['usp_loss'] = usp_loss
             loss_2d += self.score_loss_weight * usp_loss.mean()
 
+            # NOTE: target_score is sampled with warped source coords(dense), instead of the nn-matched target kpts or using the discrete scores directly.
             target_score_resampled = torch.nn.functional.grid_sample(target_score, source_uv_warped_norm.detach(), mode='bilinear', align_corners=True)
 
-            loss_2d += self.score_loss_weight * torch.nn.functional.mse_loss(target_score_resampled[border_mask.unsqueeze(1)],
-                                                                                source_score[border_mask.unsqueeze(1)]).mean() * 2
+            loss_stats['score_loss'] = torch.nn.functional.mse_loss(target_score_resampled[border_mask.unsqueeze(1)],
+                                                                    source_score[border_mask.unsqueeze(1)]).mean() * 2
+            loss_2d += self.score_loss_weight * loss_stats['score_loss']
+
+            # debug-related logging (score_all_mean, score_topk_mean, score_cov_mean)
+            # score_all_mean = (source_score[border_mask.unsqueeze(1)].mean() + target_score[border_mask.unsqueeze(1)].mean()) / 2
+            # score_cov_mean = (source_score[border_mask.unsqueeze(1)].mean() + target_score_resampled[border_mask.unsqueeze(1)].mean()) / 2
+            # source_score_topk_mean = np.mean([float(s[m[None]].topk(min(500, m.sum()))[0].mean()) for s, m in zip(source_score, border_mask)])
+            # target_score_topk_mean = np.mean([float(s[m[None]].topk(min(500, m.sum()))[0].mean()) for s, m in zip(target_score, border_mask)])
+            # score_top500_mean = (source_score_topk_mean + target_score_topk_mean) / 2
+            _topks = [100, 300, 500]
+            source_score_topks_mean = compute_topk_mean_score(source_score, border_mask, _topks)
+            target_score_topks_mean = compute_topk_mean_score(target_score, border_mask, _topks)
+            score_topks_mean = [(s+t)/2 for s, t in zip(source_score_topks_mean, target_score_topks_mean)]
+            loss_stats.update({
+                # 'score_all_mean': input_img.new_tensor(float(score_all_mean)),
+                # 'score_cov_mean': input_img.new_tensor(float(score_cov_mean)),
+                # 'score_top500_mean': input_img.new_tensor(float(score_top500_mean))
+                f'score_top{k}_mean': input_img.new_tensor(float(v)) for k, v in zip(_topks, score_topks_mean)
+            })
+
             if self.with_io:
+                # NOTE: Losses except for io_loss take all spatial samples (instead of top-k samples)
                 # Compute IO loss
                 top_k_score1, top_k_indice1 = source_score.view(B,Hc*Wc).topk(self.top_k2, dim=1, largest=False)
                 top_k_mask1 = torch.zeros(B, Hc * Wc).to(device)
@@ -362,10 +400,12 @@ class KeypointNetwithIOLoss(torch.nn.Module):
                 if inlier_mask.sum() > 10:
 
                     io_loss = torch.nn.functional.mse_loss(inlier_pred, inlier_gt)
+                    loss_stats['io_loss'] = io_loss
                     loss_2d += self.keypoint_loss_weight * io_loss
 
 
             if debug and torch.cuda.current_device() == 0:
+                # TODO: Improve image & keypoints drawing quality.
                 # Generate visualization data
                 vis_ori = (input_img[0].permute(1, 2, 0).detach().cpu().clone().squeeze() )
                 vis_ori -= vis_ori.min()
@@ -391,4 +431,4 @@ class KeypointNetwithIOLoss(torch.nn.Module):
                 self.vis['img_ori'] = np.clip(vis_ori, 0, 255) / 255.
                 self.vis['heatmap'] = np.clip(heatmap * 255, 0, 255) / 255.
 
-        return loss_2d, recall_2d
+        return loss_2d, recall_2d, loss_stats

@@ -1,7 +1,7 @@
 # Copyright 2020 Toyota Research Institute.  All rights reserved.
 
-# Config for training the v4 model: 
-#    + IONet
+# Config for training the v2 model: 
+#    - IONet
 #    + descriptor upsampling 
 #    + cross-border keypoints
 #    + descriptor loss
@@ -9,12 +9,14 @@
 model:
     params:
         use_color: True
-        with_io: True
+        with_io: False
         do_upsample: True
-        do_cross: True
+        do_cross: False  # disable regress across grid border
         descriptor_loss: True
+        with_drop: False
 
 wandb:
     dry_run: False
     project: kp2d
     entity: yuang
+    name: no_ionet

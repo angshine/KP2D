@@ -215,7 +215,7 @@ def train(config, train_loader, model, optimizer, epoch, summary):
         # calculate loss
         optimizer.zero_grad()
         data_cuda = sample_to_cuda(data)
-        loss, recall = model(data_cuda)
+        loss, recall, loss_stats = model(data_cuda)
         loss = hvd.allreduce(loss.mean(), average=True, name='loss')
 
         # compute gradient
@@ -236,10 +236,14 @@ def train(config, train_loader, model, optimizer, epoch, summary):
         if i % log_freq == 0:
             with torch.no_grad():
                 if summary:
+                    for key in loss_stats.keys():
+                        loss_stats[key] = float(hvd.allreduce(loss_stats[key].mean(), average=True, name=key))
+                    
                     train_metrics = {
                         'train_loss': running_loss / (i + 1),
                         'train_acc': running_recall / (i + 1),
                         'train_progress': train_progress,
+                        **loss_stats
                     }
 
                     for param_group in optimizer.param_groups:

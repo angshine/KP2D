@@ -1,6 +1,7 @@
 # Copyright 2020 Toyota Research Institute.  All rights reserved.
 
 import os
+import logging
 from math import pi
 
 import torch
@@ -8,6 +9,7 @@ import torch.nn.functional as F
 from PIL import Image
 
 from kp2d.utils.image import image_grid
+logger = logging.getLogger(__name__)
 
 
 class KeypointNet(torch.nn.Module):
@@ -35,6 +37,8 @@ class KeypointNet(torch.nn.Module):
 
         self.use_color = use_color
         self.with_drop = with_drop
+        if not with_drop:
+            logger.info('Dropout has been disabled!')
         self.do_cross = do_cross
         self.do_upsample = do_upsample
 
@@ -60,6 +64,7 @@ class KeypointNet(torch.nn.Module):
         self.conv4a = torch.nn.Sequential(torch.nn.Conv2d(c3, c4, kernel_size=3, stride=1, padding=1, bias=False), torch.nn.BatchNorm2d(c4,momentum=self.bn_momentum))
         self.conv4b = torch.nn.Sequential(torch.nn.Conv2d(c4, c4, kernel_size=3, stride=1, padding=1, bias=False), torch.nn.BatchNorm2d(c4,momentum=self.bn_momentum))
 
+        # QUESTION: Why the final conv of each head use kernel_size=3 instead of 1?
         # Score Head.
         self.convDa = torch.nn.Sequential(torch.nn.Conv2d(c4, c5, kernel_size=3, stride=1, padding=1, bias=False), torch.nn.BatchNorm2d(c4,momentum=self.bn_momentum))
         self.convDb = torch.nn.Conv2d(c5, 1, kernel_size=3, stride=1, padding=1)
@@ -103,7 +108,7 @@ class KeypointNet(torch.nn.Module):
             Keypoint descriptors (B, 256, H_out, W_out)
         """
         B, _, H, W = x.shape
-
+        # QUESTION: Why add so much dropout?
         x = self.relu(self.conv1a(x))
         x = self.relu(self.conv1b(x))
         if self.dropout:

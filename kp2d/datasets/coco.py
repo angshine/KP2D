@@ -23,7 +23,7 @@ class COCOLoader(Dataset):
         self.root_dir = root_dir
 
         self.files=[]
-
+        
         for filename in glob.glob(root_dir + '/*.jpg'):
             self.files.append(filename)
         self.data_transform = data_transform

@@ -30,7 +30,7 @@ cfg.wandb.dir = ''                                       # Wandb save folder
 ### MODEL
 ########################################################################################################################
 cfg.model = CN()
-cfg.model.checkpoint_path = '/data/experiments/kp2d/'              # Checkpoint path for model saving
+cfg.model.checkpoint_path = '/root/dev/Image-Local-Feature/third_party/KP2D/data/experiments'  # Checkpoint path for model saving
 cfg.model.save_checkpoint = True
 ########################################################################################################################
 ### MODEL.SCHEDULER
@@ -53,6 +53,7 @@ cfg.model.params.descriptor_loss_weight = 1.0               # Descriptor loss we
 cfg.model.params.score_loss_weight = 1.0                    # Score loss weight
 cfg.model.params.use_color = True                           # Use color or grayscale images
 cfg.model.params.with_io = True                             # Use IONet
+cfg.model.params.with_drop = True                           # Use dropout int keypoint_net
 cfg.model.params.do_upsample = True                         # Upsample descriptors
 cfg.model.params.do_cross = True                            # Use cross-border keypoints
 cfg.model.params.descriptor_loss = True                     # Use hardest negative mining descriptor loss
@@ -73,13 +74,13 @@ cfg.datasets.augmentation.jittering = (0.5, 0.5, 0.2, 0.05)     # Color jitterin
 cfg.datasets.train = CN()
 cfg.datasets.train.batch_size = 8                                      # Training batch size
 cfg.datasets.train.num_workers = 16                                    # Training number of workers
-cfg.datasets.train.path = '/data/datasets/kp2d/coco/train2017/'        # Training data path (COCO dataset)
+cfg.datasets.train.path = '/root/dev/Image-Local-Feature/third_party/KP2D/data/datasets/coco/train2017'        # Training data path (COCO dataset)
 cfg.datasets.train.repeat = 1                                          # Number of times training dataset is repeated per epoch
 ########################################################################################################################
 ### DATASETS.VAL
 ########################################################################################################################
 cfg.datasets.val = CN()
-cfg.datasets.val.path = '/data/datasets/kp2d/HPatches/'     # Validation data path (HPatches)
+cfg.datasets.val.path = '/root/dev/Image-Local-Feature/third_party/KP2D/data/datasets/HPatches'     # Validation data path (HPatches)
 ########################################################################################################################
 ### THESE SHOULD NOT BE CHANGED
 ########################################################################################################################
